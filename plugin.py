@@ -123,7 +123,7 @@ class LastFM(callbacks.Plugin):
         track = t.getElementsByTagName("name")[0].firstChild.data
         try:
             album = "["+t.getElementsByTagName("album")[0].firstChild.data+"]"
-        except IndexError:
+        except:
             album = ""
 
         if isNowplaying:
