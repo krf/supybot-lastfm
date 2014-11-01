@@ -31,7 +31,7 @@
 #from __future__ import print_function
 
 from supybot.test import *
-from plugin import LastFMParser
+from .plugin import LastFMParser
 
 from StringIO import StringIO
 
