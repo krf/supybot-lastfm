@@ -44,6 +44,10 @@ LastFM = conf.registerPlugin('LastFM')
 # This is where your configuration variables (if any) should go.  For example:
 # conf.registerGlobalValue(LastFM, 'someConfigVariableName',
 #     registry.Boolean(False, """Help for someConfigVariableName."""))
+conf.registerGlobalValue(LastFM, 'apiKeyLastFM',
+     registry.String('', """Sets the LastFM API key for this plugin: http://www.last.fm/api/account/create""", private=True))
+conf.registerGlobalValue(LastFM, 'apiKeyYouTube',
+     registry.String('', """Sets the YouTube API key for this plugin: https://developers.google.com/youtube/registering_an_application""", private=True))
 conf.registerChannelValue(LastFM, "maxResults",
     registry.NonNegativeInteger(5, """Limits the number of results that will be
         displayed in the channel."""))
