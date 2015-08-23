@@ -29,6 +29,7 @@
 
 ###
 
+from __future__ import unicode_literals
 import supybot.utils as utils
 from supybot.commands import *
 import supybot.conf as conf
@@ -38,11 +39,10 @@ import supybot.callbacks as callbacks
 import supybot.world as world
 import supybot.log as log
 
-import urllib2
 from xml.dom import minidom
 from time import time
 
-from LastFMDB import *
+from .LastFMDB import *
 
 class LastFMParser:
 
@@ -74,18 +74,18 @@ class LastFMParser:
         return (user, isNowPlaying, artist, track, album, time)
 
 class LastFM(callbacks.Plugin):
-    # 1.0 API (deprecated)
-    APIURL_1_0 = "http://ws.audioscrobbler.com/1.0/user"
-
-    # 2.0 API (see http://www.lastfm.de/api/intro)
-    APIKEY = "b7638a70725eea60737f9ad9f56f3099"
-    APIURL_2_0 = "http://ws.audioscrobbler.com/2.0/?api_key=%s&" % APIKEY
 
     def __init__(self, irc):
         self.__parent = super(LastFM, self)
         self.__parent.__init__(irc)
         self.db = LastFMDB(dbfilename)
         world.flushers.append(self.db.flush)
+        # 1.0 API (deprecated)
+        self.APIURL_1_0 = "http://ws.audioscrobbler.com/1.0/user"
+
+        # 2.0 API (see http://www.lastfm.de/api/intro)
+        self.apiKey = self.registryValue("apiKey")
+        self.APIURL_2_0 = "http://ws.audioscrobbler.com/2.0/?"
 
     def die(self):
         if self.db.flush in world.flushers:
@@ -102,6 +102,11 @@ class LastFM(callbacks.Plugin):
         Set your LastFM ID with the set method (default is your current nick)
         or specify <id> to switch for one call.
         """
+        if not self.apiKey:
+            irc.error("The API Key is not set for this plugin. Please set it via"
+                      "config plugins.lastfm.apikey and reload the plugin. "
+                      "You can sign up for an API Key using "
+                      "http://www.last.fm/api/account/create", Raise=True)
 
         id = (optionalId or self.db.getId(msg.nick) or msg.nick)
         channel = msg.args[0]
@@ -109,16 +114,15 @@ class LastFM(callbacks.Plugin):
         method = method.lower()
 
         url = "%s/%s/%s.txt" % (self.APIURL_1_0, id, method)
+        # url = "%sapi_key=%s&method=%s&user=%s" % (self.APIURL_2_0, self.apiKey, method, id)
         try:
-            f = urllib2.urlopen(url)
-        except urllib2.HTTPError:
+            f = utils.web.getUrlFd(url)
+        except utils.web.Error:
             irc.error("Unknown ID (%s) or unknown method (%s)"
-                    % (msg.nick, method))
-            return
+                    % (msg.nick, method), Raise=True)
 
-
-        lines = f.read().split("\n")
-        content = map(lambda s: s.split(",")[-1], lines)
+        lines = f.read().decode("utf-8").split("\n")
+        content = list(map(lambda s: s.split(",")[-1], lines))
 
         irc.reply("%s's %s: %s (with a total number of %i entries)"
                 % (id, method, ", ".join(content[0:maxResults]),
@@ -134,26 +138,34 @@ class LastFM(callbacks.Plugin):
         or specify <id> to switch for one call.
         """
 
+        if not self.apiKey:
+            irc.error("The API Key is not set for this plugin. Please set it via"
+                      "config plugins.lastfm.apikey and reload the plugin. "
+                      "You can sign up for an API Key using "
+                      "http://www.last.fm/api/account/create", Raise=True)
         id = (optionalId or self.db.getId(msg.nick) or msg.nick)
 
         # see http://www.lastfm.de/api/show/user.getrecenttracks
-        url = "%s&method=user.getrecenttracks&user=%s" % (self.APIURL_2_0, id)
+        url = "%sapi_key=%s&method=user.getrecenttracks&user=%s" % (self.APIURL_2_0, self.apiKey, id)
         try:
-            f = urllib2.urlopen(url)
-        except urllib2.HTTPError:
+            f = utils.web.getUrlFd(url)
+        except utils.web.Error:
             irc.error("Unknown ID (%s)" % id)
             return
 
         parser = LastFMParser()
         (user, isNowPlaying, artist, track, album, time) = parser.parseRecentTracks(f)
-        albumStr = "[" + album + "]" if album else ""
+        if track is None:
+            irc.reply("%s doesn't seem to have listened to anything." % id)
+            return
+        albumStr = ("[%s]" % album) if album else ""
         if isNowPlaying:
-            irc.reply(('%s is listening to "%s" by %s %s'
-                    % (user, track, artist, albumStr)).encode("utf8"))
+            irc.reply('%s is listening to "%s" by %s %s'
+                    % (user, track, artist, albumStr))
         else:
-            irc.reply(('%s listened to "%s" by %s %s more than %s'
+            irc.reply('%s listened to "%s" by %s %s more than %s'
                     % (user, track, artist, albumStr,
-                        self._formatTimeago(time))).encode("utf-8"))
+                        self._formatTimeago(time)))
 
     np = wrap(nowPlaying, [optional("something")])
 
@@ -182,8 +194,8 @@ class LastFM(callbacks.Plugin):
 
         url = "%s/%s/profile.xml" % (self.APIURL_1_0, id)
         try:
-            f = urllib2.urlopen(url)
-        except urllib2.HTTPError:
+            f = utils.web.getUrlFd(url)
+        except utils.web.Error:
             irc.error("Unknown user (%s)" % id)
             return
 
@@ -191,8 +203,8 @@ class LastFM(callbacks.Plugin):
         keys = "realname registered age gender country playcount".split()
         profile = tuple([self._parse(xml, node) for node in keys])
 
-        irc.reply(("%s (realname: %s) registered on %s; age: %s / %s; \
-Country: %s; Tracks played: %s" % ((id,) + profile)).encode("utf8"))
+        irc.reply("%s (realname: %s) registered on %s; age: %s / %s; "
+                  "Country: %s; Tracks played: %s" % ((id,) + profile))
 
     profile = wrap(profile, [optional("something")])
 
@@ -202,18 +214,21 @@ Country: %s; Tracks played: %s" % ((id,) + profile)).encode("utf8"))
         Compares the taste from two users
         If <user2> is ommitted, the taste is compared against the ID of the calling user.
         """
-
+        if not self.apiKey:
+            irc.error("The API Key is not set for this plugin. Please set it via"
+                      "config plugins.lastfm.apikey and reload the plugin. "
+                      "You can sign up for an API Key using "
+                      "http://www.last.fm/api/account/create", Raise=True)
         user2 = (optionalUser2 or self.db.getId(msg.nick) or msg.nick)
 
         channel = msg.args[0]
         maxResults = self.registryValue("maxResults", channel)
         # see http://www.lastfm.de/api/show/tasteometer.compare
-        url = "%s&method=tasteometer.compare&type1=user&type2=user&value1=%s&value2=%s&limit=%s" % (
-            self.APIURL_2_0, user1, user2, maxResults
-        )
+        url = "%sapi_key=%s&method=tasteometer.compare&type1=user&type2=user&value1=%s&value2=%s&limit=%s" % (
+            self.APIURL_2_0, self.apiKey, user1, user2, maxResults)
         try:
-            f = urllib2.urlopen(url)
-        except urllib2.HTTPError, e:
+            f = utils.web.getUrlFd(url)
+        except utils.web.Error as e:
             irc.error("Failure: %s" % (e))
             return
 
@@ -224,10 +239,8 @@ Country: %s; Tracks played: %s" % ((id,) + profile)).encode("utf8"))
         # Note: XPath would be really cool here...
         artists = [el for el in resultNode.getElementsByTagName("artist")]
         artistNames = [el.getElementsByTagName("name")[0].firstChild.data for el in artists]
-        irc.reply(("Result of comparison between %s and %s: score: %s, common artists: %s" \
-                % (user1, user2, scoreStr, ", ".join(artistNames))
-            ).encode("utf-8")
-        )
+        irc.reply("Result of comparison between %s and %s: score: %s, common artists: %s" \
+                % (user1, user2, scoreStr, ", ".join(artistNames)))
 
     compare = wrap(compareUsers, ["something", optional("something")])
 
