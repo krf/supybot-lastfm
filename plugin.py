@@ -174,8 +174,7 @@ class LastFM(callbacks.Plugin):
             self.log.info("LastFM._yt: [URL] %s" % link)
             return link
         else:
-            #irc.sendMsg(ircmsgs.privmsg(message_destination, no_results_message))
-            self.log.info("LastFM._yt: [URL] %s" % no_results_message)
+            self.log.info("LastFM._yt: [URL] %s" % noresults)
             return noresults
 
     def lastfm(self, irc, msg, args, method, optionalId):
