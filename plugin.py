@@ -41,6 +41,7 @@ import json
 import urllib
 from lxml import html
 import requests
+import string
 
 import urllib2
 from xml.dom import minidom
@@ -89,13 +90,13 @@ class NewLastFMParser:
         # Unfortunately this method (scraping last.fm profile page)
         #  does not include album.
 
-        tree = html.fromstring(stream.text)
+        tree = html.fromstring(stream)
         user = tree.xpath('//*[@id="content"]/header/div[2]/div/div[2]/div[1]/h1/text()')
-        user = ''.join(user).strip()
+        user = filter(lambda x: x in string.printable, ''.join(user).strip())
         track = tree.xpath('//*[@id="recent-tracks-section"]/table/tbody/tr[1]/td[3]/span/a/text()')
-        track = ''.join(track).strip()
+        track = filter(lambda x: x in string.printable, ''.join(track).strip())
         artist = tree.xpath('//*[@id="recent-tracks-section"]/table/tbody/tr[1]/td[3]/span/span[2]/a/text()')
-        artist = ''.join(artist).strip()
+        artist = filter(lambda x: x in string.printable, ''.join(artist).strip())
         timestamp = tree.xpath('//*[@id="recent-tracks-section"]/table/tbody/tr[1]/td[4]/span/text()')
         timestamp = ''.join(timestamp).strip()
 
@@ -109,18 +110,21 @@ class NewLastFMParser:
         return (user, isNowPlaying, artist, track, time)
 
 class LastFM(callbacks.Plugin):
-    # 1.0 API (deprecated)
-    APIURL_1_0 = "http://ws.audioscrobbler.com/1.0/user"
-
-    # 2.0 API (see http://www.lastfm.de/api/intro)
-    APIKEY = "b7638a70725eea60737f9ad9f56f3099"
-    APIURL_2_0 = "http://ws.audioscrobbler.com/2.0/?api_key=%s&" % APIKEY
 
     def __init__(self, irc):
         self.__parent = super(LastFM, self)
         self.__parent.__init__(irc)
         self.db = LastFMDB(dbfilename)
         world.flushers.append(self.db.flush)
+        # 1.0 API (deprecated)
+        self.APIURL_1_0 = "http://ws.audioscrobbler.com/1.0/user"
+
+        # 2.0 API (see http://www.lastfm.de/api/intro)
+        self.APIKEYLM = self.registryValue("apiKeyLastFM")
+        self.APIURL_2_0 = "http://ws.audioscrobbler.com/2.0/?api_key=%s&" % self.APIKEYLM
+
+        # YouTube API
+        self.APIKEYYT = self.registryValue("apiKeyYouTube")
 
     def die(self):
         if self.db.flush in world.flushers:
@@ -132,10 +136,15 @@ class LastFM(callbacks.Plugin):
         """
         @return link based on now playing results
         """
+        if not self.APIKEYYT:
+            self.log.error("LastFM._yt: [ERR] registryValue(\"apiKeyYouTube\") not set.")
+            isKeySet = "(is the API key set?)"
+        else:
+            isKeySet = ""
 
         url = "https://www.googleapis.com/youtube/v3/search"
-        key = "[put API key here (see https://developers.google.com/youtube/registering_an_application)]"
-        noresults = "No YouTube results found."
+        key = self.APIKEYYT
+        noresults = "No YouTube results found. %s" % isKeySet
 
         opts = {"q": query,
                 "part": "snippet",
@@ -164,17 +173,17 @@ class LastFM(callbacks.Plugin):
                 else:
                     self.log.error("LastFM._yt: [ERR] unexpected API response")
             
-            except IndexError, e:
+            except IndexError as e:
                 self.log.error("LastFM._yt: [ERR] unexpected API response (%s)" % str(e))
 
-        except Exception, err:
+        except Exception as err:
             self.log.error("LastFM._yt: [ERR] unexpected API response (%s)" % str(err))
         
         if result:
-            self.log.info("LastFM._yt: [URL] %s" % link)
+            self.log.debug("LastFM._yt: [URL] %s" % link)
             return link
         else:
-            self.log.info("LastFM._yt: [URL] %s" % noresults)
+            self.log.debug("LastFM._yt: [URL] %s" % noresults)
             return noresults
 
     def lastfm(self, irc, msg, args, method, optionalId):
@@ -224,46 +233,43 @@ class LastFM(callbacks.Plugin):
                 uid = self.db.getId(optionalId)
                 if not uid:
                     uid = optionalId
-                    self.log.info("LastFM.nowPlaying: [INFO] optionalId not converted, using: %s" % uid)
+                    self.log.debug("LastFM.nowPlaying: [INFO] optionalId not converted, using: %s" % uid)
                 else:
-                    self.log.info("LastFM.nowPlaying: [INFO] optionalId converted to LastFM id: %s" % uid)
+                    self.log.debug("LastFM.nowPlaying: [INFO] optionalId converted to LastFM id: %s" % uid)
             except:
                 uid = optionalId
-                self.log.info("LastFM.nowPlaying: [INFO] optionalId not converted, using: %s" % uid)
+                self.log.debug("LastFM.nowPlaying: [INFO] optionalId not converted, using: %s" % uid)
         else:
             uid = (self.db.getId(msg.nick) or msg.nick)
-            self.log.info("LastFM.nowPlaying: [INFO] optionalId not given, using: %s" % uid)
+            self.log.debug("LastFM.nowPlaying: [INFO] optionalId not given, using: %s" % uid)
 
         # see http://www.lastfm.de/api/show/user.getrecenttracks
         # url = "%s&method=user.getrecenttracks&user=%s" % (self.APIURL_2_0, id)
         url = "http://www.last.fm/user/%s" % (uid)
         try:
-            f = requests.get(url)
-        except requests.HTTPError:
+            f = utils.web.getUrl(url).decode('utf8')
+        except utils.web.Error:
             irc.reply("LastFM: Unknown ID %s" % uid)
             return
 
-        if f.status_code == 404:
-            irc.reply("LastFM: Unknown ID %s" % uid)
+        parser = NewLastFMParser()
+        (user, isNowPlaying, artist, track, time) = parser.parseRecentTracks(f)
+        if not track:
+            irc.reply("No information returned, it's possible user " + uid + " hasn't played anything.")
         else:
-            parser = NewLastFMParser()
-            (user, isNowPlaying, artist, track, time) = parser.parseRecentTracks(f)
-            if not track:
-                irc.reply("No information returned, it's possible user " + uid + " hasn't played anything.")
+            ytquery = track + " by " + artist
+            link = self._yt(ytquery)
+            if isNowPlaying is True:
+                irc.reply(('%s is listening to "%s" by %s | %s'
+                        % (user, track, artist, link)).encode("utf8"))
             else:
-                ytquery = track + " by " + artist
-                link = self._yt(ytquery)
-                if isNowPlaying is True:
-                    irc.reply(('%s is listening to "%s" by %s | %s'
-                            % (user, track, artist, link)).encode("utf8"))
+                if "ago" in time:
+                    irc.reply(('%s listened to "%s" by %s %s | %s'
+                            % (user, track, artist, time, link)).encode("utf-8"))
                 else:
-                    if "ago" in time:
-                        irc.reply(('%s listened to "%s" by %s %s | %s'
-                                % (user, track, artist, time, link)).encode("utf-8"))
-                    else:
-                        irc.reply(('%s listened to "%s" by %s %s | %s'
-                                % (user, track, artist,
-                                    self._formatTimeago(time), link)).encode("utf-8"))
+                    irc.reply(('%s listened to "%s" by %s %s | %s'
+                            % (user, track, artist,
+                                self._formatTimeago(time), link)).encode("utf-8"))
 
     np = wrap(nowPlaying, [optional("something")])
 
